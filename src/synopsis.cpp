@@ -5,6 +5,8 @@
 #include "synopsis.h"
 #include <unistd.h>
 
+static Ptr<BackgroundSubtractorMOG2> m_GMM = createBackgroundSubtractorMOG2();
+
 /**
 *背景建模
 */
@@ -401,6 +403,202 @@ void buildTrackDB(const char * videoFilePath, const IplImage * bgImg, list< list
     cvReleaseImage(&frame_gray);
 }
 
+/**
+*功能：	使用GMM方法与Canny算子实现背景与前景边缘提取
+*参数：	frame	-	输入图像
+*		knn		-	knn算子指针
+*		edges	-	输出边缘
+*/
+void detectEdge_GMM(IplImage* frame, Ptr<BackgroundSubtractorMOG2>& gmm, Mat& edges, \
+	int canny_thres_1, int canny_thres_2, int canny_apperture)
+{
+    if(frame == NULL || gmm == NULL)
+    {
+        printf("Error input in detectEdge function.\n");
+        return;
+    }
+    Mat frame_mat, bgimg_gmm, fgmask_gmm;
+    frame_mat = cvarrToMat(frame,true);
+
+    gmm->apply(frame_mat, fgmask_gmm, -1);//-1默认
+
+    CvMat fgMat_gmm= fgmask_gmm;
+    cvErode(&fgMat_gmm, &fgMat_gmm, 0, 2);
+    cvDilate(&fgMat_gmm, &fgMat_gmm, 0, 2);
+
+
+    cvDilate(&fgMat_gmm, &fgMat_gmm, 0, 5);
+    cvErode(&fgMat_gmm, &fgMat_gmm, 0, 5);
+
+    fgmask_gmm = cvarrToMat(&fgMat_gmm, true);
+    //knn->getBackgroundImage(bgimg_gmm);
+
+    edges=fgmask_gmm.clone();
+    Canny(fgmask_gmm, edges, canny_thres_1, canny_thres_2, canny_apperture);
+
+    //imshow("gmm前景", bgimg_gmm);
+}
+
+/**
+*前景跟踪并建立数据库结构 - GMM
+*/
+void buildTrackDB_GMM(const char * videoFilePath, const IplImage * bgImg, list< list<tube *> > & database, \
+	const int threshold, const int min_area, const int obj_num, const float extend_factor, \
+	const float category_factor, const bool save_mode) {
+//    if (bgImg == NULL) {
+//        printf("Fail: NULL background image!\n");
+//        return;
+//    }
+//
+//    if (bgImg->nChannels != 3) {
+//        printf("Fail: Background image should be grayscale!\n");
+//        return;
+//    }
+
+    if (!database.empty()) {
+        printf("Fail: Database is not empty!\n");
+        return;
+    }
+
+    if (extend_factor < 0 || extend_factor > 1 || category_factor < 0 || category_factor > 1) {
+        printf("Fail: Invalid use of params!\n0 <= extend_factor <= 1\n0 <= category_factor <= 1\n");
+        return;
+    }
+
+    CvCapture * capture = cvCaptureFromFile(videoFilePath);
+    if (!capture) {
+        printf("Fail: Unable to open video file!\n");
+        return;
+    }
+    int fps = (int)cvGetCaptureProperty(capture, CV_CAP_PROP_FPS),
+            frame_count = (int)cvGetCaptureProperty(capture, CV_CAP_PROP_FRAME_COUNT),
+            frame_id = 0;
+    CvSize size = cvSize((int)cvGetCaptureProperty(capture, CV_CAP_PROP_FRAME_WIDTH),
+                         (int)cvGetCaptureProperty(capture, CV_CAP_PROP_FRAME_HEIGHT));
+
+    IplImage * frame = NULL,
+            *frame_gray = cvCreateImage(size, IPL_DEPTH_8U, 1);
+           // *fgImg = cvCreateImage(cvSize(bgImg->width, bgImg->height), bgImg->depth, bgImg->nChannels);
+
+    //以下变量用于轮廓查找函数
+    CvMemStorage * storage = cvCreateMemStorage();
+    CvSeq * first_contour = NULL;
+
+    int find_num = 0,
+            extend_w = 0,
+            extend_h = 0;
+    list<CvRect> rects; //存放找到的前景块位置
+    char time[10]; //存放时间
+    int m = 0, s = 0; //分、秒
+    int last_find_num = 0;
+
+    printf("Build track database...\n");
+    while (frame = cvQueryFrame(capture)) {
+        Mat frame_mat;
+        //<CvRect> rects; //存放找到的前景块位置
+        vector<Point2d> centers; //存放找到的前景块中心
+        vector<vector<Point> > contours;
+        vector<Vec4i> hierarchy;
+
+        //frame_mat = cvarrToMat(tmp,true);
+        frame_mat = cvarrToMat(frame,true);
+        Mat edges;
+        detectEdge_GMM(frame, m_GMM, edges);
+        findContours(edges, contours, hierarchy, CV_RETR_EXTERNAL, CHAIN_APPROX_TC89_KCOS, Point());
+        last_find_num = find_num;
+        find_num = contours.size();
+        /**!!!Be careful with the param below!!!**/
+        if (find_num > (obj_num * 3) || frame == NULL ) {
+            //frame_id += 1;
+            //cvReleaseImage(&tmp);
+            continue;
+        }
+        printf("frame:%d\tfind contour num:%d\n", frame_id, find_num);
+
+        //contour analysis
+        if(contours.size()>0)
+        {
+            for( int i = 0; i < contours.size(); i++ )
+            {
+                Rect r = boundingRect(contours[i]);
+                if(r.height * r.width > 2000) {
+                    rects.push_back(r);
+                }
+                //centers.push_back((r.br()+r.tl())*0.5);
+            }
+        }
+
+//        for(int i=0; i<centers.size(); i++)
+//        {
+//            circle(frame_mat,centers[i],3,Scalar(0,255,0),1,CV_AA);
+//        }
+
+        mergeRects(rects); //merge rects进一步筛选
+
+        for (list<CvRect>::iterator iter = rects.begin(); iter != rects.end(); iter++) {
+            //cvRectangle(frame, cvPoint(iter->x, iter->y), cvPoint(iter->x + iter->width, iter->y + iter->height),\
+									cvScalar(0,255,0), 1);//在frame中标示出最后保存的方框区域
+            m = (frame_id / fps) / 60;
+            s = (frame_id / fps) % 60;
+            sprintf(time, "%02d:%02d", m, s);
+            CvFont font;
+            cvInitFont(&font, CV_FONT_HERSHEY_COMPLEX, 0.5, 0.5, 1, 2, 8);
+            cvPutText(frame, time, cvPoint(iter->x + iter->width / 3, iter->y + iter->height / 3), \
+				&font, cvScalar(0, 0, 255));//在frame中标记时间
+            cvSetImageROI(frame, *iter);
+            IplImage * target = cvCreateImage(cvSize((*iter).width, (*iter).height), frame->depth, frame->nChannels);
+            cvCopy(frame, target);
+
+            bool added = false;//判断通过下面的循环是否将tube加入到database
+            for (list< list<tube *> >::iterator i = database.begin(); i != database.end(); i++) {
+                list<tube *>::iterator j = i->end();//如果 *i 为空则应该到 database 末端了，循环应已终止
+                j--;//找到list<tube *>最后一个元素，及该目标的最新跟踪数据
+                if (isSameObj(*iter, (*j)->position, category_factor)) {//判断是同一跟踪目标
+                    i->push_back(new tube(*iter, frame_id / fps, target));
+                    added = true;
+                    break;
+                }
+            }
+            if (!added)//扫描现有database未发现匹配项则新建跟踪目标链表
+                database.push_back(list<tube *>(1, new tube(*iter, frame_id / fps, target)));
+
+            cvResetImageROI(frame);
+            cvReleaseImage(&target);
+        }
+
+        //The following 3 lines are for debuging, comment them when debug is done!
+        //cvShowImage("frame", frame);
+        //cvShowImage("fgImg", fgImg);
+        //cvWaitKey(40);
+
+        frame_id += 1;
+        rects.clear();
+        cvClearMemStorage(storage);
+        //cvReleaseImage(&tmp);
+    }
+    printf("Track DB has been saved! Total frame num:%d\tValid frame:%d\n", frame_count, frame_id);
+
+    if (save_mode) {//如果设置了保存模式，则将database中图像保存于“./DB”文件夹下
+        if (access("./DB", 0) == 0)//判断是否存在文件夹“./DB”, 如果存在，先强制删除（避免原来有记录）
+            system("rm -rf DB");
+        system("mkdir DB");//创建文件夹“./DB"
+        int i = 0, j = 0;
+        char filename[50];// "./DB/obj_iii_seq_jjjj_px%d_py%d_t%d.jpg"
+        for (list< list<tube *> >::iterator iter1 = database.begin(); iter1 != database.end(); iter1++, i++) {
+            j = 0;
+            for (list<tube *>::iterator iter2 = iter1->begin(); iter2 != iter1->end(); iter2++, j++) {
+                sprintf(filename, "./DB/obj_%03d_seq_%04d_px%d_py%d_t%d.jpg", i, j, (*iter2)->position.x, (*iter2)->position.y, (*iter2)->t_sec);
+                cvSaveImage(filename, (*iter2)->target);
+                printf("File %s saved.\n", filename);
+            }
+        }
+    }
+
+    //释放内存
+    cvReleaseMemStorage(&storage);
+
+    cvReleaseImage(&frame_gray);
+}
 
 /**
 *融合跟踪数据库，输出视频摘要，同时释放Database内存

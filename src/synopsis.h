@@ -13,12 +13,18 @@
 
 #include <opencv/cv.h>
 #include <opencv/highgui.h>
-#include <opencv2/core.hpp>
+#include <opencv2/opencv.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/video/background_segm.hpp>
+#include <opencv2/flann.hpp>
 #include <list>
 #include <stdio.h>
 #include<algorithm>
 
 using namespace std;
+using namespace cv;
 
 /**
 *功能：	取前N帧平均法做背景建模
@@ -64,6 +70,13 @@ struct tube {
 *		save_mode		-	是否保存跟踪结果图像(保存结果需要在当前路径建立文件夹“DB”)
 */
 void buildTrackDB(const char * videoFilePath, const IplImage * bgImg, list< list<tube *> > & database, \
+	const int threshold = 100, const int min_area = 900, const int obj_num = 30, \
+	const float extend_factor = 0.2, const float category_factor = 0.5, const bool save_mode = false);
+
+void detectEdge_GMM(IplImage* frame, Ptr<BackgroundSubtractorMOG2>& gmm, Mat& edges, \
+	int canny_thres_1 = 20, int canny_thres_2 = 190, int canny_apperture = 3);
+
+void buildTrackDB_GMM(const char * videoFilePath, const IplImage * bgImg, list< list<tube *> > & database, \
 	const int threshold = 100, const int min_area = 900, const int obj_num = 30, \
 	const float extend_factor = 0.2, const float category_factor = 0.5, const bool save_mode = false);
 

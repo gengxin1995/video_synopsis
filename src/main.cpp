@@ -48,8 +48,8 @@ void getFgImagedd(const IplImage * frame, IplImage * fgImg, const IplImage * bgI
 int main(int argc, char* argv[])
 {
 
-    const char file_path[] = "/home/xin/Desktop/mydata/segment_1min.avi";
-    const char file_out_path[] = "/home/xin/Desktop/output/test_dav_out.avi";
+    const char file_path[] = "/Users/gengxin/CLionProjects/video_synopsis/data/segment_1min.avi";
+    const char file_out_path[] = "/Users/gengxin/CLionProjects/video_synopsis/output/test_dav_out.avi";
 
     int fps, frame_number;
     CvSize size;
@@ -61,10 +61,10 @@ int main(int argc, char* argv[])
 
     code = (int)CV_FOURCC('x', 'v', 'i', 'd');
 
-    buildTrackDB(file_path, bgImage, database);
+    buildTrackDB_GMM(file_path, bgImage, database);
     mergeDB(database, file_out_path, fps, size, bgImage);
 
-    VideoCapture capture("/home/xin/Desktop/output/test_dav_out.avi");
+    VideoCapture capture("/Users/gengxin/CLionProjects/video_synopsis/output/test_dav_out.avi");
     Mat frame;
 
     while (capture.isOpened())
